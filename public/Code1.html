@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Bản đồ Thủ Đức</title>
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+  <style>
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+    }
+
+    .feature-btn {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: #fff;
+      padding: 8px;
+      border-radius: 6px;
+    }
+
+    .info-panel {
+      position: absolute;
+      top: 60px;
+      left: 10px;
+      z-index: 1000;
+      background: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      min-width: 220px;
+      display: none;
+    }
+
+    .highlight {
+      font-weight: bold;
+      color: #d00;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="feature-btn">
+    <button id="showChurchesBtn">Hiển thị Nhà Thờ</button>
+    <button id="route2pointsBtn">Tìm đường 2 điểm</button>
+    <button id="routeToChurchBtn">Từ vị trí đến Nhà Thờ</button>
+  </div>
+  <div class="info-panel" id="infoPanel"></div>
+  <div id="map"></div>
+  <script>
+    // Khởi tạo bản đồ
+    const map = L.map('map').setView([10.85, 106.77], 12);
+
+    // Thêm lớp nền từ MapTiler
+    L.tileLayer('https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=ZEMftlNXBc8Dvz57as1K', {
+      tileSize: 512,
+      zoomOffset: -1,
+      minZoom: 10,
+      maxZoom: 18,
+      attribution: '&copy; MapTiler &copy; OpenStreetMap contributors',
+      crossOrigin: true
+    }).addTo(map);
+
+    // Giới hạn zom trong thủ đức
+    map.setMaxBounds([
+      [10.75, 106.65], // Góc dưới bên trái
+      [10.95, 106.85]  // Góc trên bên phải
+    ]);
+
+    // Không cho phóng to quá mức zoom tối đa
+    map.setMaxZoom(18);
+    map.setMinZoom(10);
+
+    // Tạo icon riêng cho marker tìm đường đi
+    const routeMarkerIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png', // hoặc icon bạn muốn
+      iconSize: [32, 32],
+      iconAnchor: [16, 32]
+    });
+    // Icon cho nhà thờ
+    const churchIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448590.png',
+      iconSize: [28, 28],
+      iconAnchor: [14, 28]
+    });
+
+    // Lớp lưu marker nhà thờ
+    let churchMarkers = [];
+    let churchLayer = null;
+    let routingControl = null;
+    let routeMarkers = [];
+    let currentFeature = "showChurches"; // default
+
+    // Hiển thị nhà thờ
+    function showChurches() {
+      clearRoute();
+      if (churchLayer) map.removeLayer(churchLayer);
+      fetch('NhaTho.geojson')
+        .then(res => res.json())
+        .then(data => {
+          churchLayer = L.geoJSON(data, {
+            pointToLayer: function (feature, latlng) {
+              let marker = L.marker(latlng, {
+                icon: churchIcon
+              });
+              marker.bindPopup(`<span class="highlight">${feature.properties.Name}</span><br><button onclick="showChurchInfo('${feature.properties.Name.replace(/'/g, "\\'")}')">Xem chi tiết</button>`);
+              marker.churchName = feature.properties.Name;
+              churchMarkers.push(marker);
+              return marker;
+            }
+          }).addTo(map);
+        });
+    }
+
+    // Hiển thị thông tin nhà thờ (giả lập, bạn có thể thay bằng nội dung thật)
+    window.showChurchInfo = function (name) {
+      document.getElementById('infoPanel').style.display = 'block';
+      document.getElementById('infoPanel').innerHTML = `<b>${name}</b><br>Đây là trang giới thiệu nhà thờ.<br><button onclick="hideInfoPanel()">Đóng</button>`;
+    }
+    window.hideInfoPanel = function () {
+      document.getElementById('infoPanel').style.display = 'none';
+    }
+
+    // Tìm đường giữa 2 điểm bất kỳ
+    function enableRoute2Points() {
+      clearRoute();
+      if (churchLayer) map.removeLayer(churchLayer);
+      let waypoints = [];
+      function onMapClick(e) {
+        if (waypoints.length < 2) {
+          let marker = L.marker(e.latlng, { icon: routeMarkerIcon }).addTo(map);
+          marker.isRouteMarker = true;
+          routeMarkers.push(marker);
+          waypoints.push(e.latlng);
+          if (waypoints.length === 2) {
+            if (routingControl) map.removeControl(routingControl);
+            routingControl = L.Routing.control({
+              waypoints: waypoints,
+              routeWhileDragging: false,
+              show: false
+            }).addTo(map);
+            routingControl.on('routesfound', function (e) {
+              let route = e.routes[0];
+              let meters = route.summary.totalDistance;
+              let seconds = route.summary.totalTime;
+              let km = (meters / 1000).toFixed(2);
+              let time = (meters / 1000 / 20 * 60).toFixed(1); // 20km/h
+              document.getElementById('infoPanel').style.display = 'block';
+              document.getElementById('infoPanel').innerHTML =
+                `<b>Khoảng cách:</b> ${km} km<br><b>Thời gian (20km/h):</b> ${time} phút<br>
+                <button onclick="clearRoute()">Xóa đường đi</button>`;
+            });
+          }
+        }
+      }
+      map.on('click', onMapClick);
+      // Lưu lại để tắt khi chuyển tính năng
+      enableRoute2Points._off = () => map.off('click', onMapClick);
+    }
+
+    // Tìm đường từ vị trí hiện tại đến nhà thờ
+    function enableRouteToChurch() {
+      clearRoute();
+      if (churchLayer) map.removeLayer(churchLayer);
+      fetch('NhaTho.geojson')
+        .then(res => res.json())
+        .then(data => {
+          churchLayer = L.geoJSON(data, {
+            pointToLayer: function (feature, latlng) {
+              let marker = L.marker(latlng, {
+                icon: churchIcon
+              });
+              marker.bindPopup(`<span class="highlight">${feature.properties.Name}</span><br><button onclick="routeToThisChurch(${latlng.lat},${latlng.lng},'${feature.properties.Name.replace(/'/g, "\\'")}')">Chỉ đường tới đây</button>`);
+              return marker;
+            }
+          }).addTo(map);
+        });
+    }
+    window.routeToThisChurch = function (lat, lng, name) {
+      clearRoute();
+      if (!navigator.geolocation) {
+        alert("Trình duyệt không hỗ trợ định vị.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        let start = L.latLng(pos.coords.latitude, pos.coords.longitude);
+        let end = L.latLng(lat, lng);
+        let marker1 = L.marker(start, {
+          icon: routeMarkerIcon
+        }).addTo(map);
+        let marker2 = L.marker(end, {
+          icon: churchIcon
+        }).addTo(map);
+        marker1.isRouteMarker = true;
+        marker2.isRouteMarker = true;
+        routeMarkers.push(marker1, marker2);
+        if (routingControl) map.removeControl(routingControl);
+        routingControl = L.Routing.control({
+          waypoints: [start, end],
+          routeWhileDragging: false,
+          show: false
+        }).addTo(map);
+        routingControl.on('routesfound', function (e) {
+          let route = e.routes[0];
+          let meters = route.summary.totalDistance;
+          let km = (meters / 1000).toFixed(2);
+          let time = (meters / 1000 / 20 * 60).toFixed(1); // 20km/h
+          document.getElementById('infoPanel').style.display = 'block';
+          document.getElementById('infoPanel').innerHTML =
+            `<b>Đến:</b> ${name}<br><b>Khoảng cách:</b> ${km} km<br><b>Thời gian (20km/h):</b> ${time} phút<br>
+            <button onclick="clearRoute()">Xóa đường đi</button>`;
+        });
+      }, function () {
+        alert("Không lấy được vị trí hiện tại.");
+      });
+    }
+
+    // Xóa đường đi và marker tìm đường
+    window.clearRoute = function () {
+      if (routingControl) {
+        map.removeControl(routingControl);
+        routingControl = null;
+      }
+      routeMarkers.forEach(m => map.removeLayer(m));
+      routeMarkers = [];
+      document.getElementById('infoPanel').style.display = 'none';
+    }
+
+    // Chuyển đổi tính năng
+    function switchFeature(feature) {
+      if (feature === currentFeature) return;
+      // Tắt các event/tính năng trước đó
+      if (enableRoute2Points._off) enableRoute2Points._off();
+      if (churchLayer) map.removeLayer(churchLayer);
+      clearRoute();
+      if (feature === "showChurches") showChurches();
+      if (feature === "route2points") enableRoute2Points();
+      if (feature === "routeToChurch") enableRouteToChurch();
+      currentFeature = feature;
+    }
+
+    // Gán sự kiện cho nút
+    document.getElementById('showChurchesBtn').onclick = () => switchFeature("showChurches");
+    document.getElementById('route2pointsBtn').onclick = () => switchFeature("route2points");
+    document.getElementById('routeToChurchBtn').onclick = () => switchFeature("routeToChurch");
+
+    // Mặc định hiển thị nhà thờ
+    showChurches();
+  </script>
+</body>
+
+</html>
